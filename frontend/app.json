@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "MAX",
+    "slug": "max",
+    "scheme": "max",
+    "platforms": ["ios", "android"],
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "assetBundlePatterns": ["**/*"],
+    "sdkVersion": "54.0.0",
+    "runtimeVersion": "1.0.0",
+    "extra": {
+      "apiUrl": "http://192.168.1.50:8000"
+    }
+  }
+}
