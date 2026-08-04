@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { SafeAreaView, View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, Keyboard, useWindowDimensions, Animated } from 'react-native';
+import { SafeAreaView, View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, Keyboard, useWindowDimensions, Animated, PermissionsAndroid } from 'react-native';
+import Voice from '@react-native-voice/voice';
+import * as Speech from 'expo-speech';
 import { sendMessage } from '../services/api';
 import { useAppStore } from '../store/appStore';
 
@@ -8,7 +10,14 @@ export default function ChatScreen() {
   const [draft, setDraft] = useState('');
   const [isThinking, setIsThinking] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [isStartingVoice, setIsStartingVoice] = useState(false);
+  const [voiceHint, setVoiceHint] = useState('Tap the mic to speak');
   const scrollRef = useRef<ScrollView>(null);
+  const inputRef = useRef<TextInput>(null);
+  const draftRef = useRef('');
+  const dictationPrefixRef = useRef('');
+  const hasFinalTranscriptRef = useRef(false);
   const { assistantName } = useAppStore();
   const { height } = useWindowDimensions();
   const dot1 = useRef(new Animated.Value(0.6)).current;
@@ -22,6 +31,50 @@ export default function ChatScreen() {
     return () => {
       showSub.remove();
       hideSub.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    Voice.onSpeechStart = () => {
+      hasFinalTranscriptRef.current = false;
+      setIsListening(true);
+      setIsStartingVoice(false);
+      setVoiceHint('Listening… speak now');
+    };
+    Voice.onSpeechEnd = () => {
+      setIsListening(false);
+      setIsStartingVoice(false);
+      if (!hasFinalTranscriptRef.current) {
+        setVoiceHint('Processing your speech…');
+      }
+    };
+    Voice.onSpeechPartialResults = (event) => {
+      const partialTranscript = event.value?.[0] ?? '';
+      if (partialTranscript) {
+        updateDraftFromTranscript(partialTranscript);
+        setVoiceHint('Listening…');
+      }
+    };
+    Voice.onSpeechResults = (event) => {
+      const transcript = event.value?.[0] ?? '';
+      if (transcript) {
+        hasFinalTranscriptRef.current = true;
+        updateDraftFromTranscript(transcript);
+        setVoiceHint('Transcript ready — review and send');
+      } else {
+        setVoiceHint('I did not catch that. Tap the mic and try again.');
+      }
+    };
+    Voice.onSpeechError = (event: any) => {
+      setIsListening(false);
+      setIsStartingVoice(false);
+      const message = event?.error?.message ?? 'Voice input unavailable';
+      setVoiceHint(message);
+    };
+
+    return () => {
+      Voice.removeAllListeners();
+      Voice.destroy().catch(() => undefined);
     };
   }, []);
 
@@ -55,17 +108,93 @@ export default function ChatScreen() {
     if (!draft.trim()) return;
     const userMessage = { id: Date.now(), text: draft.trim(), role: 'user' as const };
     setMessages((prev) => [...prev, userMessage]);
+    draftRef.current = '';
     setDraft('');
     setIsThinking(true);
 
     try {
       const response = await sendMessage(userMessage.text);
       setMessages((prev) => [...prev, { id: Date.now() + 1, text: response.reply, role: 'assistant' }]);
+      Speech.speak(response.reply, {
+        language: 'en-US',
+        pitch: 1.05,
+        rate: 0.95,
+        voice: 'com.apple.ttsbundle.Samantha-compact',
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       setMessages((prev) => [...prev, { id: Date.now() + 2, text: `Unable to reach MAX right now. ${message}`, role: 'assistant' }]);
     } finally {
       setIsThinking(false);
+    }
+  };
+
+  const updateDraftFromTranscript = (transcript: string) => {
+    const normalizedTranscript = transcript.trim();
+    if (!normalizedTranscript) return;
+
+    const prefix = dictationPrefixRef.current;
+    const nextDraft = prefix ? `${prefix}${prefix.endsWith(' ') ? '' : ' '}${normalizedTranscript}` : normalizedTranscript;
+    draftRef.current = nextDraft;
+    setDraft(nextDraft);
+  };
+
+  const requestMicPermission = async () => {
+    if (isListening || isStartingVoice) return;
+
+    try {
+      setIsStartingVoice(true);
+      setVoiceHint('Requesting microphone access…');
+
+      if (Platform.OS === 'android') {
+        const androidPermission = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
+        if (androidPermission !== 'granted') {
+          setVoiceHint('Microphone access was denied');
+          setIsStartingVoice(false);
+          return;
+        }
+      }
+
+      const isAvailable = await Voice.isAvailable();
+      if (!isAvailable) {
+        setVoiceHint('Speech recognition is not available on this device');
+        setIsStartingVoice(false);
+        return;
+      }
+
+      dictationPrefixRef.current = draftRef.current.trimEnd();
+      inputRef.current?.focus();
+      setVoiceHint('Listening… speak now');
+      await Voice.start('en-US');
+    } catch (error) {
+      setIsListening(false);
+      setIsStartingVoice(false);
+      const message = error instanceof Error ? error.message : 'Voice input is unavailable right now';
+      const normalizedMessage = message.toLowerCase();
+      if (normalizedMessage.includes('ispeechavailable') || normalizedMessage.includes('null') || normalizedMessage.includes('native module')) {
+        setVoiceHint('Voice recognition needs a development build on this phone. Rebuild the app and try again.');
+      } else {
+        setVoiceHint(message);
+      }
+    }
+  };
+
+  const stopListening = async () => {
+    try {
+      await Voice.stop();
+    } catch {
+      // ignore
+    }
+    setIsListening(false);
+    setIsStartingVoice(false);
+    setVoiceHint('Tap the mic to speak');
+  };
+
+  const handleMicPress = () => {
+    if (isListening) {
+      void stopListening();
+    } else if (!isStartingVoice) {
+      void requestMicPermission();
     }
   };
 
@@ -115,16 +244,31 @@ export default function ChatScreen() {
         </ScrollView>
 
         <View style={[styles.inputRow, keyboardVisible && styles.inputRowActive]}>
-          <TextInput
-            style={styles.input}
-            value={draft}
-            onChangeText={setDraft}
-            placeholder="Ask MAX anything"
-            placeholderTextColor="#8aa0b8"
-            multiline
-            maxLength={500}
-            returnKeyType="done"
-          />
+          <View style={styles.inputColumn}>
+            <TextInput
+              ref={inputRef}
+              style={styles.input}
+              value={draft}
+              onChangeText={(value) => {
+                draftRef.current = value;
+                setDraft(value);
+              }}
+              placeholder={isListening ? 'Listening… speak now' : 'Ask MAX anything'}
+              placeholderTextColor={isListening ? '#7dd3fc' : '#8aa0b8'}
+              multiline
+              maxLength={500}
+              returnKeyType="done"
+            />
+            <Text style={[styles.voiceHint, isListening && styles.voiceHintActive]}>{voiceHint}</Text>
+          </View>
+          <TouchableOpacity
+            accessibilityLabel={isListening ? 'Stop voice input' : 'Start voice input'}
+            accessibilityRole="button"
+            style={[styles.micButton, (isListening || isStartingVoice) && styles.micButtonActive]}
+            onPress={handleMicPress}
+          >
+            <Text style={[styles.micButtonText, (isListening || isStartingVoice) && styles.micButtonTextActive]}>{isListening || isStartingVoice ? '●' : '🎤'}</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={styles.sendButton} onPress={handleSend}>
             <Text style={styles.sendButtonText}>Send</Text>
           </TouchableOpacity>
@@ -192,6 +336,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#081120',
     marginBottom: 0,
   },
+  inputColumn: { flex: 1, marginRight: 8 },
   inputRowActive: {
     borderTopColor: '#274368',
     paddingBottom: Platform.OS === 'ios' ? 16 : 12,
@@ -209,6 +354,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#22395b',
   },
+  micButton: { backgroundColor: '#0f243f', paddingHorizontal: 12, paddingVertical: 11, borderRadius: 16, justifyContent: 'center', marginRight: 8 },
+  micButtonActive: { backgroundColor: '#1d4ed8' },
+  micButtonText: { color: '#78a3ff', fontSize: 18 },
+  micButtonTextActive: { color: '#fff' },
+  voiceHint: { color: '#8aa0b8', fontSize: 12, marginTop: 6, marginLeft: 4 },
+  voiceHintActive: { color: '#7dd3fc' },
   sendButton: { backgroundColor: '#2c6cff', paddingHorizontal: 14, paddingVertical: 11, borderRadius: 16, justifyContent: 'center' },
   sendButtonText: { color: '#fff', fontWeight: '700' },
 });

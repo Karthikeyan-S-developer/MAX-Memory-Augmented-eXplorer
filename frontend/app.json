@@ -3,14 +3,39 @@
     "name": "MAX",
     "slug": "max",
     "scheme": "max",
-    "platforms": ["ios", "android"],
+    "platforms": [
+      "ios",
+      "android"
+    ],
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "sdkVersion": "54.0.0",
     "runtimeVersion": "1.0.0",
     "extra": {
       "apiUrl": "http://192.168.1.50:8000"
+    },
+    "plugins": [
+      [
+        "@react-native-voice/voice",
+        {
+          "microphonePermission": "MAX needs microphone access so you can speak to it.",
+          "speechRecognitionPermission": "MAX needs speech recognition access to turn your voice into text."
+        }
+      ]
+    ],
+    "android": {
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "ios": {
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "MAX needs microphone access so you can speak to it.",
+        "NSSpeechRecognitionUsageDescription": "MAX needs speech recognition access to turn your voice into text."
+      }
     }
   }
 }
